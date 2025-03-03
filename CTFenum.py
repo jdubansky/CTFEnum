@@ -41,8 +41,8 @@ def main():
 
     ip = arg
 
-    if ip != '127.0.0.1':
-        clean_hosts(ip)
+    #if ip != '127.0.0.1':
+        #clean_hosts(ip)
 
     output_dict = mod_nmap.nmap(ip)
 
@@ -60,7 +60,7 @@ def main():
     hostname = scan_hostname(nmap_detail)
 
     if dns or hostname:
-        clean_hosts(ip, dns)
+        #clean_hosts(ip, dns)
         register_dns = [dns]
         if hostname:
             register_dns += [ hostname, f'{hostname}.{dns}' ]

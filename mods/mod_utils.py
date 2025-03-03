@@ -4,6 +4,10 @@ import requests
 import subprocess
 import sys
 from os import system
+import select
+import termios
+import tty
+import time
 
 # Initialize colorama
 init()
@@ -130,23 +134,59 @@ def clean_hosts(ip, subdomain=None):
 
 # Starts a list of subprocesses and then wait for them to finish
 def launch_procs(procs):
+    def is_input_available():
+        return select.select([sys.stdin], [], [], 0)[0] != []
+
+    def get_char():
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(sys.stdin.fileno())
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return ch
+
     while procs:
         try:
             running_procs = []
-
-            # Launch subprocesses up to the maximum limit or until the end of the list
-        
+            
+            # Launch subprocesses up to the maximum limit
             for proc in procs[:max_subprocess]:
                 proc.start()
                 running_procs.append(proc)
-        
-            # Wait for the running subprocesses to finish
-            for proc in running_procs:
-                proc.join()
-
-            # Remove finished subprocesses from the list
+            
+            # Monitor running processes and check for 's' key press
+            while running_procs:
+                # Check for 's' key press without blocking
+                if is_input_available():
+                    char = get_char()
+                    if char.lower() == 's':
+                        printc("\n[!] Skipping current module(s)...", YELLOW)
+                        # Terminate all running processes
+                        for p in running_procs:
+                            if p.is_alive():
+                                p.terminate()
+                        break
+                
+                # Clean up finished processes
+                running_procs = [p for p in running_procs if p.is_alive()]
+                if not running_procs:
+                    break
+                    
+                # Small sleep to prevent CPU overuse
+                time.sleep(0.1)
+            
+            # Remove processed items from the queue
             procs = procs[max_subprocess:]
-        except:
+        except KeyboardInterrupt:
+            # Handle Ctrl+C gracefully
+            for p in running_procs:
+                if p.is_alive():
+                    p.terminate()
+            printc("\n[!] Interrupted by user", YELLOW)
+            return []
+        except Exception as e:
             continue
     return []
 
