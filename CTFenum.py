@@ -67,6 +67,21 @@ def main():
         if '.' in dns: register_dns.append(dns.split('.')[0])
         mod_dns.dns_add_subdomains(ip, register_dns)
 
+    # UDP
+    for port in udp_ports:
+            # TFTP
+        if port == '69':
+            process = multiprocessing.Process(target=mod_tftp.handle_tftp, args=(ip,))
+            procs.append(process)
+            # SNMP
+        if port == '161':
+            process = multiprocessing.Process(target=mod_snmp.handle_snmp, args=(ip,))
+            procs.append(process)     
+    # DNS
+    if ('53' in tcp_ports) or ('53' in udp_ports):
+        process = multiprocessing.Process(target=mod_dns.handle_dns, args=(ip, dns))
+        procs.append(process)
+
     # TCP
     for port in tcp_ports:
             # FTP
@@ -84,9 +99,6 @@ def main():
             # FINGER
         elif port == '79':
             target=mod_finger.handle_finger(ip)
-            # HTTP
-        elif (port == '80') or (port == '443') or (port == '5000') or (port == '8000') or (port == '8080') or (port == '8081') or (port == '8443') or (port == '10443'):
-            mod_http.handle_http(ip, port)
             # KERBEROS
         elif port == '88':
            mod_kerberos.handle_kerberos(ip, dns)
@@ -110,21 +122,10 @@ def main():
         # SMTP
         elif port == '25':
             mod_smtp.handle_smtp(ip)
+        # HTTP
+        elif (port == '80') or (port == '443') or (port == '5000') or (port == '8000') or (port == '8080') or (port == '8081') or (port == '8443') or (port == '10443'):
+            mod_http.handle_http(ip, port)
 
-    # UDP
-    for port in udp_ports:
-            # TFTP
-        if port == '69':
-            process = multiprocessing.Process(target=mod_tftp.handle_tftp, args=(ip,))
-            procs.append(process)
-            # SNMP
-        if port == '161':
-            process = multiprocessing.Process(target=mod_snmp.handle_snmp, args=(ip,))
-            procs.append(process)     
-    # DNS
-    if ('53' in tcp_ports) or ('53' in udp_ports):
-        process = multiprocessing.Process(target=mod_dns.handle_dns, args=(ip, dns))
-        procs.append(process)
     
     procs = launch_procs(procs)
 
