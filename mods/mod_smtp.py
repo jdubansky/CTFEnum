@@ -3,6 +3,7 @@ import socket
 import ssl
 from mods.mod_utils import *
 import re
+import multiprocessing
 
 
 def validate_email(email):
@@ -32,90 +33,75 @@ def handle_smtp(ip, port):
             printc(f'[-] Invalid IP address: {ip}', RED)
             return
 
-        # Create SMTP connection with timeout
-        smtp = smtplib.SMTP(timeout=10)
-        
-        # Try connecting with STARTTLS first
-        try:
-            smtp.connect(ip, port)
-            if test_smtp_command(smtp, 'starttls'):
-                context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-                smtp.starttls(context=context)
-                printc('[+] Successfully upgraded to TLS connection', GREEN)
-        except Exception:
-            # If STARTTLS fails, try regular connection
-            smtp = smtplib.SMTP(timeout=10)
-            smtp.connect(ip, port)
-        
         print_banner(str(port))
         print('[+] SMTP Server Information:')
-        
-        # Get server info
-        try:
-            server_info = smtp.ehlo()
-            if server_info[0] == 250:
-                for line in server_info[1].decode().split('\n'):
-                    print(f'[+] {line}')
-            else:
-                # Try HELO if EHLO fails
-                server_info = smtp.helo()
-                if server_info[0] == 250:
-                    print(f'[+] {server_info[0]} {server_info[1].decode()}')
-        except Exception as e:
-            printc(f'[-] Failed to get server info: {str(e)}', RED)
-        
-        # Test various SMTP commands
-        print('\n[+] Testing SMTP commands:')
-        commands = {
-            'VRFY': ['root', 'admin', 'administrator', 'postmaster', 'mail', 'www-data'],
-            'EXPN': ['root', 'admin', 'postmaster'],
-            'RCPT': ['postmaster@localhost', 'root@localhost']
-        }
-        
-        for command, test_values in commands.items():
-            print(f'\n[+] Testing {command} command:')
-            for value in test_values:
+
+        procs = []
+
+        def run_smtp_enum():
+            try:
+                # Create SMTP connection with timeout
+                smtp = smtplib.SMTP(timeout=10)
+                
+                # Try connecting with STARTTLS first
                 try:
-                    if command == 'RCPT':
-                        # For RCPT, we need to send MAIL FROM first
-                        smtp.docmd('MAIL FROM:', '<test@test.com>')
-                        code, message = smtp.docmd('RCPT TO:', f'<{value}>')
-                    else:
-                        code, message = smtp.docmd(command, value)
-                        
-                    if code == 250:
-                        printc(f'[+] Valid recipient: {value}', GREEN)
-                    elif code == 252:
-                        printc(f'[+] Recipient may exist: {value} (response: 252)', BLUE)
-                    elif code == 550 or code == 551:
-                        print(f'[-] Invalid recipient: {value}')
-                    else:
-                        print(f'[?] Unknown response for {value}: {code} {message.decode()}')
+                    smtp.connect(ip, port)
+                    if test_smtp_command(smtp, 'starttls'):
+                        context = ssl.create_default_context()
+                        context.check_hostname = False
+                        context.verify_mode = ssl.CERT_NONE
+                        smtp.starttls(context=context)
+                        printc('[+] Successfully upgraded to TLS connection', GREEN)
                 except Exception:
-                    continue
-                    
-        # Test for open relay
-        print('\n[+] Testing for open relay:')
-        try:
-            test_from = 'test@test.com'
-            test_to = 'test@test.com'
-            
-            smtp.docmd('MAIL FROM:', f'<{test_from}>')
-            code, message = smtp.docmd('RCPT TO:', f'<{test_to}>')
-            
-            if code == 250:
-                printc('[!] WARNING: Server might be an open relay!', RED)
-            else:
-                print('[-] Server is not an open relay')
-        except Exception:
-            print('[-] Could not test for open relay')
-                    
-        smtp.quit()
-        
+                    # If STARTTLS fails, try regular connection
+                    smtp = smtplib.SMTP(timeout=10)
+                    smtp.connect(ip, port)
+                
+                # Get server info
+                try:
+                    server_info = smtp.ehlo()
+                    if server_info[0] == 250:
+                        for line in server_info[1].decode().split('\n'):
+                            print(f'[+] {line}')
+                    else:
+                        # Try HELO if EHLO fails
+                        server_info = smtp.helo()
+                        if server_info[0] == 250:
+                            print(f'[+] {server_info[0]} {server_info[1].decode()}')
+                except Exception as e:
+                    printc(f'[-] Failed to get server info: {str(e)}', RED)
+                
+                # Test various SMTP commands
+                print('\n[+] Testing SMTP commands:')
+                commands = {
+                    'VRFY': ['root', 'admin', 'administrator', 'postmaster', 'mail', 'www-data'],
+                    'EXPN': ['root', 'admin', 'postmaster'],
+                    'RCPT': ['postmaster@localhost', 'root@localhost']
+                }
+                
+                for cmd, users in commands.items():
+                    print(f'\n[+] Testing {cmd} command:')
+                    for user in users:
+                        result = test_smtp_command(smtp, cmd, user)
+                        if result:
+                            printc(f'[+] {cmd} {user}: {result}', GREEN)
+                            log(f'{cmd} {user}: {result}', '', ip, 'smtp')
+                        else:
+                            print(f'[-] {cmd} {user}: Command failed or not supported')
+                
+                smtp.quit()
+            except Exception as e:
+                printc(f'[-] SMTP Error: {str(e)}', RED)
+
+        # Create process for SMTP enumeration
+        smtp_proc = multiprocessing.Process(target=run_smtp_enum)
+        procs.append(smtp_proc)
+
+        # Launch all processes with skip functionality
+        procs = launch_procs(procs)
+
     except Exception as e:
-        printc(f'[-] SMTP Error: {str(e)}', RED)
+        printc(f'[-] Error: {str(e)}', RED)
         return
 
     log(f"SMTP enumeration completed on {ip}:{port}", "Python smtplib", ip, "smtp")

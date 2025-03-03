@@ -2,6 +2,7 @@ from mods.mod_utils import *
 from mods.mod_smb import *
 import subprocess
 import os
+import multiprocessing
 
 
 def enum_users(target, domain):
@@ -203,11 +204,22 @@ def bruteforce_kerberos_users(target, domain):
 
 
 def handle_kerberos(target, domain):
-    #printc('kerberos', RED)
+    """Handle Kerberos enumeration and testing."""
+    if (len(domain) < 3): 
+        return
 
-    if (len(domain) < 3): return
-    rid_cycling(target=target, domain=domain)
-    if os.path.exists('smb_users.txt'):
-        bruteforce(target, 445)
-    if not check_smb_credentials(target, domain):
-        bruteforce_kerberos_users(target, domain)
+    procs = []
+
+    def run_rid_cycling():
+        rid_cycling(target=target, domain=domain)
+        if os.path.exists('smb_users.txt'):
+            bruteforce(target, 445)
+        if not check_smb_credentials(target, domain):
+            bruteforce_kerberos_users(target, domain)
+
+    # Create process for RID cycling and related operations
+    rid_proc = multiprocessing.Process(target=run_rid_cycling)
+    procs.append(rid_proc)
+
+    # Launch all processes with skip functionality
+    procs = launch_procs(procs)

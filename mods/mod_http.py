@@ -7,6 +7,7 @@ import requests
 import urllib3
 import re
 import os
+import multiprocessing
 
 # Globals
 fast_wordlist = ''
@@ -332,27 +333,44 @@ def handle_http(ip, port):
 
     create_short_wordlist()
 
-    # PINT BANNER
+    # Create a list to store processes
+    procs = []
+
+    # PRINT BANNER
     print_banner(error_display_port)
     # IDENTIFY SERVER TECHNOLOGIES
     http_identify_server(ip, port)
     # PRINT INITIAL URL
     printc(f'[!] URL: {update_url(ip, port)}', GREEN)
-    # LAUNCH FEROXBUSTER
-    urls = call_ferox(fast_wordlist, ip, port)
-    print('')
-    # EXTRACT COMMENTS
-    if len(urls) > 0:
-        for url in urls:
-            http_extract_comments(make_request(url))
-    # PRINT COMMENTS
-    if len(comments_founded) > 0:
-        print(f'[!] Comments found:')
-        data = '\n'.join(list(set(comments_founded)))
-        printc(data, GREEN)
-
-        log(data, '', ip)
-    # FUZZ SUBDOMAINS
-    if (domain != ''):
-        http_fuzz_subdomains(port)
+    
+    # Create process for feroxbuster
+    def run_ferox():
+        urls = call_ferox(fast_wordlist, ip, port)
+        print('')
+        # EXTRACT COMMENTS
+        printc(f'[!] Scanning the URLs found for comments', GREEN)
+        if len(urls) > 0:
+            for url in urls:
+                http_extract_comments(make_request(url))
+        # PRINT COMMENTS
+        if len(comments_founded) > 0:
+            print(f'[!] Comments found:')
+            data = '\n'.join(list(set(comments_founded)))
+            printc(data, GREEN)
+            log(data, '', ip)
+    
+    ferox_proc = multiprocessing.Process(target=run_ferox)
+    procs.append(ferox_proc)
+    
+    # Create process for subdomain fuzzing
+    def run_subdomain_fuzz():
+        if domain != '':
+            http_fuzz_subdomains(port)
+    
+    if domain != '':
+        subdomain_proc = multiprocessing.Process(target=run_subdomain_fuzz)
+        procs.append(subdomain_proc)
+    
+    # Launch all processes with skip functionality
+    procs = launch_procs(procs)
     

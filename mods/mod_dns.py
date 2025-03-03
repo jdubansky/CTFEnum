@@ -3,6 +3,7 @@ import re
 from mods.mod_utils import *
 import socket
 import shlex
+import multiprocessing
 
 
 def dns_print_banner():
@@ -127,48 +128,58 @@ def handle_dns(ip, dns=None):
         printc(f'[-] Invalid IP address: {ip}', RED)
         return
 
-    # Construct and escape the dig command
-    cmd_dns = f'dig axfr @{ip} {shlex.quote(dns)}'
+    procs = []
 
-    try:
-        output = subprocess.check_output(
-            cmd_dns, 
-            shell=True, 
-            stderr=subprocess.STDOUT, 
-            universal_newlines=True,
-            timeout=30  # Add timeout
-        )
+    def run_zone_transfer():
+        # Construct and escape the dig command
+        cmd_dns = f'dig axfr @{ip} {shlex.quote(dns)}'
 
-        if 'Transfer failed' in output or 'communications error' in output:
-            printc('[-] Zone transfer failed - Transfer might be forbidden', RED)
-            return
+        try:
+            output = subprocess.check_output(
+                cmd_dns, 
+                shell=True, 
+                stderr=subprocess.STDOUT, 
+                universal_newlines=True,
+                timeout=30  # Add timeout
+            )
 
-        if output and 'SERVER:' in output:
-            subdomains = set()
-            
-            # Process each line of output
-            for line in output.splitlines():
-                subdomain = parse_dns_record(line, dns)
-                if subdomain:
-                    subdomains.add(subdomain)
+            if 'Transfer failed' in output or 'communications error' in output:
+                printc('[-] Zone transfer failed - Transfer might be forbidden', RED)
+                return
 
-            if subdomains:
-                if dns_add_subdomains(ip, subdomains):
-                    dns_print_banner()
-                    print(f'[!] {cmd_dns}')
-                    print('\n[+] Found subdomains:')
-                    for subdomain in sorted(subdomains):
-                        printc(f'    {subdomain}', GREEN)
+            if output and 'SERVER:' in output:
+                subdomains = set()
+                
+                # Process each line of output
+                for line in output.splitlines():
+                    subdomain = parse_dns_record(line, dns)
+                    if subdomain:
+                        subdomains.add(subdomain)
 
-                    log('\n'.join(sorted(subdomains)), cmd_dns, ip, 'dig')
+                if subdomains:
+                    if dns_add_subdomains(ip, subdomains):
+                        dns_print_banner()
+                        print(f'[!] {cmd_dns}')
+                        print('\n[+] Found subdomains:')
+                        for subdomain in sorted(subdomains):
+                            printc(f'    {subdomain}', GREEN)
+
+                        log('\n'.join(sorted(subdomains)), cmd_dns, ip, 'dig')
+                    else:
+                        printc('[-] Failed to update hosts file', RED)
                 else:
-                    printc('[-] Failed to update hosts file', RED)
-            else:
-                printc('[-] No subdomains found', YELLOW)
+                    printc('[-] No subdomains found', YELLOW)
 
-    except subprocess.TimeoutExpired:
-        printc('[-] DNS query timed out', RED)
-    except subprocess.CalledProcessError as e:
-        printc(f'[-] Error running dig command: {str(e)}', RED)
-    except Exception as e:
-        printc(f'[-] Unexpected error: {str(e)}', RED)
+        except subprocess.TimeoutExpired:
+            printc('[-] DNS query timed out', RED)
+        except subprocess.CalledProcessError as e:
+            printc(f'[-] Error running dig command: {str(e)}', RED)
+        except Exception as e:
+            printc(f'[-] Unexpected error: {str(e)}', RED)
+
+    # Create and add process for zone transfer
+    zone_transfer_proc = multiprocessing.Process(target=run_zone_transfer)
+    procs.append(zone_transfer_proc)
+
+    # Launch all processes with skip functionality
+    procs = launch_procs(procs)
