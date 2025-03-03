@@ -211,32 +211,7 @@ def check_version():
     printc(banner, GREEN)
 
     current_version = '1.0.0'
-    
-    with open('/opt/CTFEnum/CTFenum/mods/version', 'r') as file:
-        current_version = file.read()
-        print('[!] Version: ', end='')
-        printc(current_version, GREEN)
-        current_version = current_version.replace('.', '')
-    
-    online_version_url = 'https://raw.githubusercontent.com/josemlwdf/CTFEnum/main/CTFenum/mods/version'
-    online_version = current_version
-    try:
-        response = requests.get(online_version_url)
-    except:
-        pass
-    if response:
-        formatted_online_version = response.text
-        online_version = formatted_online_version.replace('.', '')
-
-    if online_version > current_version:
-        printc('[*] A New version of CTF Enum is available.', GREEN)
-        print('[!] GitHub version is: ', end='')
-        printc(formatted_online_version, YELLOW, RED)
-        
-        cmd = 'curl https://raw.githubusercontent.com/josemlwdf/CTFEnum/main/install.sh|bash'
-        print(f'[!] {cmd}')
-        printc(f'[-] Update as soon as possible.', RED)
-        print_separator()
+    printc(f'Current version: {current_version}', GREEN)
 
 def log(data, cmd, target='', tool='ctfenum'):
     thislog_path = f'{logs_folder}/{target.replace(".", "-")}'
