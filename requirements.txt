@@ -1,0 +1,6 @@
+impacket>=0.11.0
+pysnmp>=4.4.12
+scapy>=2.5.0
+tftpy>=0.8.0
+# Additional dependencies that might be needed based on the codebase
+colorama>=0.4.6  # For color printing (if used in mod_utils) 

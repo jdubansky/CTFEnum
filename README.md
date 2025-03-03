@@ -21,6 +21,8 @@ Provides recommendations and potential actions for specific ports (e.g., brute f
 ## Installation
     curl https://raw.githubusercontent.com/josemlwdf/CTFEnum/main/install.sh|bash
 
+    pip install -r requirements.txt
+
 ## Usage
 
 Run the tool by providing the IP address as an argument:

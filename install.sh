@@ -54,9 +54,9 @@ if ! command_exists feroxbuster; then
 fi
 
 # Check and install Metasploit
-if ! command_exists msfconsole; then
-    echo "Installing Metasploit..."
-    sudo apt install metasploit-framework -y;
+#if ! command_exists msfconsole; then
+#    echo "Installing Metasploit..."
+#    sudo apt install metasploit-framework -y;
 fi
 
 # Check and install dig (part of dnsutils)

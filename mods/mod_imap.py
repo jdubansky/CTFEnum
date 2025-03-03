@@ -1,19 +1,40 @@
+import imaplib
+import socket
 from mods.mod_utils import *
-import subprocess
 
 def handle_imap(ip, port):
-    cmd = f"msfconsole -q -x 'use auxiliary/scanner/imap/imap_version; set RHOSTS {ip}; set RPORT {port}; run; exit'"
-    output = None
-
     try:
-        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, universal_newlines=True)
-
-        if output:
-            print_banner(port)
-            print('[!] IMAP ')
-            print('[!] https://book.hacktricks.xyz/network-services-pentesting/pentesting-imap')
-            print('[!] If you get creds, use this client to dump the emails: https://github.com/josemlwdf/IMAP-Mail-Dumper')
-            print(f'[!] {cmd}')
-            printc(output, BLUE)
-    except:
+        # Create connection
+        imap = imaplib.IMAP4(ip, port)
+        
+        # Get server capabilities and version
+        print_banner(str(port))
+        print('[+] IMAP Server Information:')
+        
+        # Get server greeting (contains version usually)
+        if hasattr(imap, 'welcome'):
+            printc(f'[+] Server greeting: {imap.welcome.decode()}', GREEN)
+            
+        # Get capabilities
+        typ, capabilities = imap.capability()
+        if typ == 'OK':
+            print('[+] Server capabilities:')
+            for cap in capabilities[0].decode().split():
+                print(f'    {cap}')
+                
+        # Try some basic auth methods
+        print('\n[+] Supported authentication methods:')
+        if 'AUTH=PLAIN' in capabilities[0].decode():
+            print('    PLAIN')
+        if 'AUTH=LOGIN' in capabilities[0].decode():
+            print('    LOGIN')
+        if 'AUTH=CRAM-MD5' in capabilities[0].decode():
+            print('    CRAM-MD5')
+            
+        imap.logout()
+        
+    except Exception as e:
+        printc(f'[-] IMAP Error: {str(e)}', RED)
         return
+        
+    log(f"IMAP enumeration completed on {ip}:{port}", "Python imaplib", ip, "imap")

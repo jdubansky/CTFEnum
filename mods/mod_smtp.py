@@ -1,17 +1,38 @@
-import subprocess
+import smtplib
+import socket
 from mods.mod_utils import *
 
-def handle_smtp(ip):
-    cmd = f'msfconsole -q -x "use auxiliary/scanner/smtp/smtp_enum;set RHOSTS {ip};set UNIXONLY false;set USER_FILE /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt;run;exit;"'
-    output = None
-    
+def handle_smtp(ip, port):
     try:
-        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, universal_newlines=True)
-        if output:
-            print_banner('25')
-            print('[!] SMTP')
-            print(f'[!] {cmd}')
-            print(output)
-            log(output, cmd, ip, 'msfconsole')
-    except:
+        # Create SMTP connection
+        smtp = smtplib.SMTP(timeout=10)
+        smtp.connect(ip, port)
+        
+        # Get server info
+        server_info = smtp.ehlo()
+        if server_info[0] == 250:
+            print_banner(str(port))
+            print('[+] SMTP Server Information:')
+            for line in server_info[1].decode().split('\n'):
+                print(f'[+] {line}')
+            
+            # Try VRFY command with common usernames
+            print('\n[+] Testing VRFY command with common usernames:')
+            common_users = ['root', 'admin', 'administrator', 'postmaster', 'mail', 'www-data']
+            for user in common_users:
+                try:
+                    code, message = smtp.verify(user)
+                    if code == 250:
+                        printc(f'[+] Valid user found: {user}', GREEN)
+                    elif code == 252:
+                        printc(f'[+] User {user} may exist (response: 252)', BLUE)
+                except:
+                    pass
+                    
+        smtp.quit()
+        
+    except Exception as e:
+        printc(f'[-] SMTP Error: {str(e)}', RED)
         return
+
+    log(f"SMTP enumeration completed on {ip}:{port}", "Python smtplib", ip, "smtp")
