@@ -8,6 +8,7 @@ import urllib3
 import re
 import os
 import multiprocessing
+from multiprocessing import Queue
 
 # Globals
 fast_wordlist = ''
@@ -223,11 +224,11 @@ def get_domain(url):
 
 
 def call_ferox(filename, ip, port, proto='http', checkdns=True, silent=True):
-    global urls_founded
-    global server
-    
+    """Run feroxbuster and collect URLs."""
+    collected_urls = []
     base_url = update_url(ip, port)
     cmd_printed = False
+    
     if silent:
         cmd = f'feroxbuster -u {base_url} -w {filename} -x {",".join(list(set(extensions)))} -t 100 --no-state --extract-links -C 400,401,403,404,501,502,503 -r -k -E -g -d 1 --silent'
     else:
@@ -240,62 +241,83 @@ def call_ferox(filename, ip, port, proto='http', checkdns=True, silent=True):
             line = process.stdout.readline()
             if not line:
                 break
-            elif is_blacklisted_url(line) or (line.strip() == ''):
+                
+            line = line.strip()
+            if not line:
                 continue
-            # Identifies if there was an internal subdomain error 
-            # feroxbuster is called again without --silent parameter in order to
-            # identify this subdomain
-            elif ('could not connect' in line.lower()) and silent:
+                
+            # Skip blacklisted URLs
+            if is_blacklisted_url(line):
+                continue
+                
+            # Handle internal subdomain error
+            if ('could not connect' in line.lower()) and silent:
                 silent = False
-                call_ferox(filename, ip, port, proto, checkdns, silent)
-                cmd_printed =True
-
+                new_urls = call_ferox(filename, ip, port, proto, checkdns, silent)
+                if new_urls:
+                    collected_urls.extend(new_urls)
+                cmd_printed = True
                 log('', cmd, ip, 'feroxbuster')
                 break
-            # When feroxbuster is called withour --silent parameter
-            # we captures this error to extract the domain where
-            # we have been redirected
+                
+            # Handle timeout and domain discovery
             elif ('operation timed out' in line.lower()):
-                domain_and_port = line.split('/')[2]
-                host = domain_and_port.split(':')[0]
-                if (host != ip) and checkdns:
-                    global domain
-                    if (domain == ''):
-                        domain = get_domain(host)
-                    # Register the new domain/subdomain
-                    if not register_subdomains([host], ip): 
+                try:
+                    domain_and_port = line.split('/')[2]
+                    host = domain_and_port.split(':')[0]
+                    if (host != ip) and checkdns:
+                        global domain
+                        if (domain == ''):
+                            domain = get_domain(host)
+                        # Register the new domain/subdomain
+                        if not register_subdomains([host], ip): 
+                            break
+                        checkdns = False
+
+                        # Test HTTPS
+                        response = make_request(update_url(host, port, 'https'))
+                        if response: 
+                            proto = 'https'
+                        
+                        # Identify technologies
+                        global server
+                        server = ''
+                        http_identify_server(host, port, proto)
+                        
+                        # Scan new domain
+                        silent = True
+                        new_urls = call_ferox(filename, host, port, proto, checkdns, silent)
+                        if new_urls:
+                            collected_urls.extend(new_urls)
+                        cmd_printed = True
                         break
-                    checkdns = False
-
-                    # We make a test to see if there is HTTPS and use it as prefered Protocol
-                    response = make_request(update_url(host, port, 'https'))
-                    if response: proto = 'https'
+                except:
+                    continue
                     
-                    # Once the subdomain is registered we tries to identify the technologies on it
-                    server = ''
-                    http_identify_server(host, port, proto)
-                    
-                    # This time we call feroxbuster with the address of the registered domain
-                    silent = True
-                    call_ferox(filename, host, port, proto, checkdns, silent)
-                    cmd_printed = True
-                    break
+            # Process valid URL
             else:
-                if not cmd_printed: print(f'[!] {cmd}\n'); cmd_printed = True
-                line = line.strip()
-                if line not in urls_founded:
-                    urls_founded.append(line)
-                    print(line)
+                if not cmd_printed: 
+                    print(f'[!] {cmd}\n')
+                    cmd_printed = True
+                    
+                # Try to extract URL from the line
+                url_match = re.search(r'https?://[^\s]+', line)
+                if url_match:
+                    url = url_match.group(0)
+                    if url not in collected_urls:
+                        collected_urls.append(url)
+                        print(url)
+                        log(url, '', ip, 'feroxbuster')
 
-                    log(line, '', ip, 'feroxbuster')
         process.kill()
 
     except Exception as e:
-        if not cmd_printed: print(f'[!] {cmd}\n')
+        if not cmd_printed: 
+            print(f'[!] {cmd}\n')
         printc(f'[-] {e}', RED)
-        return None
+        return collected_urls
 
-    return urls_founded
+    return collected_urls
 
 
 def http_fuzz_subdomains(port):
@@ -319,7 +341,7 @@ def http_fuzz_subdomains(port):
         if len(subdomain) > 0:
             for host in subdomains:
                 for url in urls_founded:
-                    if host not in url: call_ferox(filename, host, port)
+                    if host not in url: call_ferox(fast_wordlist, host, port)
 
 
 def update_url(host, port, proto='http'):
@@ -343,15 +365,38 @@ def handle_http(ip, port):
     # PRINT INITIAL URL
     printc(f'[!] URL: {update_url(ip, port)}', GREEN)
     
+    # Use a Queue to get results back from the process
+    result_queue = Queue()
+    
     # Create process for feroxbuster
-    def run_ferox():
-        urls = call_ferox(fast_wordlist, ip, port)
-        print('')
-        # EXTRACT COMMENTS
+    def run_ferox(queue):
+        try:
+            urls = call_ferox(fast_wordlist, ip, port)
+            if urls:
+                queue.put(urls)
+            print('')
+        except Exception as e:
+            printc(f'[-] Error in feroxbuster scan: {str(e)}', RED)
+            queue.put([])
+    
+    ferox_proc = multiprocessing.Process(target=run_ferox, args=(result_queue,))
+    procs.append(ferox_proc)
+    
+    # Launch feroxbuster process
+    procs = launch_procs(procs)
+    
+    # Get URLs from the queue
+    try:
+        urls = result_queue.get(timeout=1)  # 1 second timeout
+    except:
+        urls = []
+        
+    # Extract comments and process URLs
+    if urls:
         printc(f'[!] Scanning the URLs found for comments', GREEN)
-        if len(urls) > 0:
-            for url in urls:
-                http_extract_comments(make_request(url))
+        for url in urls:
+            http_extract_comments(make_request(url))
+            
         # PRINT COMMENTS
         if len(comments_founded) > 0:
             print(f'[!] Comments found:')
@@ -359,18 +404,12 @@ def handle_http(ip, port):
             printc(data, GREEN)
             log(data, '', ip)
     
-    ferox_proc = multiprocessing.Process(target=run_ferox)
-    procs.append(ferox_proc)
-    
     # Create process for subdomain fuzzing
-    def run_subdomain_fuzz():
-        if domain != '':
-            http_fuzz_subdomains(port)
-    
     if domain != '':
+        def run_subdomain_fuzz():
+            http_fuzz_subdomains(port)
+        
         subdomain_proc = multiprocessing.Process(target=run_subdomain_fuzz)
-        procs.append(subdomain_proc)
-    
-    # Launch all processes with skip functionality
-    procs = launch_procs(procs)
-    
+        procs = [subdomain_proc]  # New list since we're done with ferox_proc
+        procs = launch_procs(procs)
+
